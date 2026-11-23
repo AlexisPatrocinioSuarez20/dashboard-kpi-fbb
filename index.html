@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard KPI FBB (M&amp;E)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet">
+  <link href="css/styles.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+
+<!-- ===== PANTALLA DE LOGIN ===== -->
+<div id="loginScreen" class="login-screen">
+  <div class="login-card">
+    <div class="fs-1 mb-2">📡</div>
+    <h4 class="fw-bold mb-1">Dashboard KPI FBB (M&amp;E)</h4>
+    <p class="text-muted small mb-4">Ingresa con tu cuenta de Google. Debes tener acceso de edición a la hoja de datos.</p>
+    <button class="btn btn-primary w-100 fw-bold" id="loginBtn">Iniciar sesión con Google</button>
+    <div class="small text-danger mt-3" id="loginError"></div>
+    <div class="small text-muted mt-3 d-none" id="demoNote">Modo demo: datos de ejemplo, no se conecta a tu hoja.</div>
+  </div>
+</div>
+
+<!-- ===== APLICACIÓN ===== -->
+<div id="appRoot" class="d-none">
+  <nav class="app-nav d-flex align-items-center px-4 py-2 gap-3">
+    <span class="fw-bold fs-5 text-white">📡 Dashboard KPI FBB <span class="fw-normal opacity-75">(M&amp;E)</span></span>
+    <span class="badge bg-warning text-dark d-none" id="demoBadge">MODO DEMO</span>
+    <span class="ms-auto small text-white-50" id="userEmail"></span>
+    <button class="btn btn-sm btn-outline-light" id="reloadBtn" title="Volver a leer la hoja">🔄 Actualizar</button>
+    <button class="btn btn-sm btn-outline-light" id="logoutBtn">Salir</button>
+  </nav>
+  <div id="authBanner" class="alert alert-warning rounded-0 mb-0 py-2 px-4 d-none d-flex align-items-center gap-2">
+    <span>⏰ Tu sesión de Google expiró (dura 1 hora). Reconecta para seguir guardando.</span>
+    <button class="btn btn-sm btn-warning fw-bold" id="reconnectBtn">Reconectar</button>
+  </div>
+
+  <ul class="nav nav-tabs app-tabs px-4 pt-2" role="tablist">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-dashboard" type="button">📊 Dashboard</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-daily" type="button">📝 Reporte Diario</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-wa" type="button">💬 OLT Down</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-legal" type="button">⚖️ Legal</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-tasks" type="button">📅 Tareas</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-cortes" type="button">⚡ Cortes</button></li>
+  </ul>
+
+  <div class="tab-content container-fluid px-4 py-4">
+    <div class="tab-pane fade show active" id="tab-dashboard">
+      <div id="main-capture-area">
+  <!-- Encabezado -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h4 class="fw-bold mb-0 text-dark">Estado de Sitios BTS</h4>
+      <p class="text-muted mb-0 small">Baterías y Rectificadores</p>
+    </div>
+    <div>
+      <button class="btn btn-primary btn-sm me-2" onclick="exportFullTablePNG()">📷 Descargar Tabla Completa (PNG)</button>
+      <button class="btn btn-success btn-sm me-2" onclick="exportToCSV()">📥 Descargar Excel</button>
+      <button class="btn btn-outline-primary btn-sm" onclick="loadMainData()">🔄 Actualizar Datos</button>
+    </div>
+  </div>
+
+  <!-- Tarjetas KPI Dinámicas -->
+  <div class="kpi-scroll-container mb-4" id="kpi-section">
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">Total BTS</span><span class="kpi-number text-primary" id="kpi-total-bts">--</span></div>
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">Total Zonas</span><span class="kpi-number text-info" id="kpi-total-zones">--</span></div>
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">Total OLT</span><span class="kpi-number text-secondary" id="kpi-total-olt">--</span></div>
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">Baterías Monit.</span><span class="kpi-number text-success" id="kpi-batt">--</span></div>
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">DC sin Monit.</span><span class="kpi-number text-danger" id="kpi-dc">--</span></div>
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">Need More Batt.</span><span class="kpi-number text-danger" id="kpi-need-batt">--</span></div>
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">Mon. IP y BBU</span><span class="kpi-number text-success" id="kpi-ip-bbu">--</span></div>
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">Monitoreo IP</span><span class="kpi-number text-primary" id="kpi-ip-only">--</span></div>
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">Solo Mon. BBU5G</span><span class="kpi-number text-info" id="kpi-bbu5g">--</span></div>
+    <div class="card kpi-card p-3 bg-white text-center flex-fill"><span class="text-muted small text-uppercase">Solo Mon. BBU4G</span><span class="kpi-number text-warning" id="kpi-bbu4g">--</span></div>
+  </div>
+
+  <!-- Filtros y Tabla Principal -->
+  <div class="table-container" style="z-index: 10;">
+    <div class="row mb-3 align-items-end">
+      <div class="col-md-4">
+        <label for="searchInput" class="form-label small text-muted fw-bold">Buscar / Pegar listado de BTS (comas, espacios o saltos de línea):</label>
+        <textarea id="searchInput" class="form-control" rows="2" placeholder="Ej: ARE0107, LAL0136..." oninput="filterTableDebounced()"></textarea>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted fw-bold">Filtro Branch:</label>
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start d-flex justify-content-between align-items-center" type="button" id="dropdownBranchButton" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+            <span id="dropdownBranchText">Seleccionar branch...</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-custom shadow bg-white" aria-labelledby="dropdownBranchButton" id="branchCheckboxList"></ul>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted fw-bold">Filtro múltiples estados:</label>
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start d-flex justify-content-between align-items-center" type="button" id="dropdownMenuButton" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+            <span id="dropdownButtonText">Seleccionar estados...</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-custom shadow bg-white" aria-labelledby="dropdownMenuButton">
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="DC with mon."> DC with mon.</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="DC without mon."> DC without mon.</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="Batt with mon."> Batt with mon.</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="BTS without batt"> BTS without batt</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="Batt. OK"> Batt. OK</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="Need more batt."> Need more batt.</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="Rectifier OK"> Rectifier OK</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="Need more rectifier"> Need more rectifier</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="Monitored"> Monitored</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="Not Monitored"> Not Monitored</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="Loss Monitored"> Loss Monitored</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="BBU 5G"> BBU 5G</label></li>
+            <li><label class="dropdown-item px-2 py-1"><input class="form-check-input me-2 status-checkbox" type="checkbox" value="BBU 4G"> BBU 4G</label></li>
+          </ul>
+        </div>
+      </div>
+      <div class="col-md-2 text-md-end text-muted small mt-2 mt-md-0 d-flex justify-content-end align-items-center gap-2">
+        <button class="btn btn-outline-danger btn-sm" type="button" onclick="clearFilters()" title="Limpiar filtros">❌ Limpiar</button>
+        <span id="record-count">Cargando...</span>
+      </div>
+    </div>
+
+    <div id="loader" class="text-center py-5">
+      <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Cargando...</span></div>
+      <p class="text-muted mt-2">Consultando datos del Google Sheet...</p>
+    </div>
+
+    <div class="table-responsive mb-4" id="table-scroll-container" style="max-height: 500px; overflow-y: auto;">
+      <table class="table table-hover table-striped align-middle mb-0" id="btsTable" style="display:none;">
+        <thead class="sticky-top" id="tableHead" style="z-index: 4;"></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- SEGUNDA SECCIÓN: RESUMEN POR BRANCH Y GRÁFICO -->
+  <div class="summary-card p-3 mt-4" id="summary-section">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="fw-bold text-dark m-0">📊 Resumen por Branch (Ordenado de mayor a menor)</h5>
+      <div>
+        <button class="btn btn-outline-success btn-sm me-2" onclick="exportSummaryCSV()">📥 Descargar Tabla CSV</button>
+        <button class="btn btn-outline-primary btn-sm" onclick="exportSummaryPNG()">📷 Descargar Gráfico y Tabla (PNG)</button>
+      </div>
+    </div>
+    <div id="exportable-summary" class="bg-white p-3 rounded">
+      <div class="row align-items-center">
+        <div class="col-lg-6">
+          <div class="table-responsive" style="max-height: 350px; overflow-y: auto;">
+            <table class="table table-bordered table-hover compact-table mb-0 align-middle" id="summaryTable">
+              <thead class="table-dark sticky-top"><tr id="summaryHeadTr"><th style="width: 120px;">Branch</th></tr></thead>
+              <tbody id="summaryBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="col-lg-6 text-center mt-3 mt-lg-0">
+          <div style="position: relative; height: 320px; width: 100%;"><canvas id="branchBarChart"></canvas></div>
+        </div>
+      </div>
+    </div>
+  </div>
+      </div>
+    </div>
+    <div class="tab-pane fade" id="tab-daily"><div id="dailyReportPane"><div class="text-center text-muted py-5">Cargando…</div></div></div>
+    <div class="tab-pane fade" id="tab-wa">
+  <!-- TERCERA SECCIÓN: WHATSAPP -->
+  <div class="section-container border border-success">
+    <h4 class="fw-bold text-success mb-3">💬 Generador de Mensaje Diario para WhatsApp & Collage</h4>
+    <form id="waForm" class="row g-3 p-3 bg-light rounded mb-4 border" onsubmit="generateWAMessage(event)">
+      <input type="hidden" id="editWaId">
+      <div class="col-md-3"><label class="form-label small fw-bold">BTS:</label><input type="text" id="waBts" class="form-control form-control-sm" placeholder="Ej: JUN0111" required oninput="autofillWaData()"></div>
+      <div class="col-md-3"><label class="form-label small fw-bold">Branch:</label><input type="text" id="waBranch" class="form-control form-control-sm" placeholder="Ej: JUN" required></div>
+      <div class="col-md-3"><label class="form-label small fw-bold">Cantidad de Clientes Afectados (Active + Suspended):</label><input type="number" id="waSubs" class="form-control form-control-sm" placeholder="Ej: 291" required></div>
+      <div class="col-md-3"><label class="form-label small fw-bold">Fecha:</label><input type="date" id="waDate" class="form-control form-control-sm" required></div>
+      <div class="col-md-12"><label class="form-label small fw-bold">¿Qué pasó?:</label><textarea id="waQ1" class="form-control form-control-sm" rows="2" required></textarea></div>
+      <div class="col-md-12"><label class="form-label small fw-bold">¿Por qué pasó?:</label><textarea id="waQ2" class="form-control form-control-sm" rows="2" required></textarea></div>
+      <div class="col-md-12"><label class="form-label small fw-bold">¿Por qué falló la protección?:</label><textarea id="waQ3" class="form-control form-control-sm" rows="2" required></textarea></div>
+      <div class="col-md-12"><label class="form-label small fw-bold">¿Autonomía batería?:</label><input type="text" id="waQ4" class="form-control form-control-sm" required></div>
+      <div class="col-md-12"><label class="form-label small fw-bold">¿Qué acción se tomó?:</label><textarea id="waQ5" class="form-control form-control-sm" rows="2" required></textarea></div>
+      <div class="col-md-12"><label class="form-label small fw-bold">¿Qué se hará para que no se repita?:</label><textarea id="waQ6" class="form-control form-control-sm" rows="2" required></textarea></div>
+      <div class="col-md-12">
+        <label class="form-label small fw-bold text-primary">Subir Múltiples Fotografías para el Collage:</label>
+        <input type="file" id="waPhotos" class="form-control form-control-sm" accept="image/*" multiple onchange="previewCollage(event, 'collageGrid', 'waBts', 'collageTitleBar', 'PROBLEM')">
+      </div>
+      <div class="col-md-12 text-center" id="collagePreviewWrapper" style="display:none;">
+        <div class="d-flex justify-content-center mt-2">
+          <div class="border rounded bg-white shadow-sm p-3" id="collageCaptureArea">
+            <div id="collageTitleBar" class="collage-title-bar">PROBLEM BTS</div>
+            <div id="collageGrid" class="collage-grid mb-3"></div>
+          </div>
+        </div>
+        <button type="button" class="btn btn-outline-success btn-sm fw-bold mt-2" onclick="downloadCollagePNG('waBts', 'PROBLEM', 'collageGrid')">📥 Descargar Foto Collage (PNG)</button>
+      </div>
+      <div class="col-md-12 d-flex gap-2 mt-4">
+        <button type="submit" class="btn btn-success btn-sm w-50 fw-bold" id="saveWaBtn">💾 Guardar en Histórico y Generar Mensaje</button>
+        <button type="button" class="btn btn-outline-primary btn-sm w-50 fw-bold" onclick="copyWAMessage()">📋 Copiar Texto para WhatsApp</button>
+        <button type="button" class="btn btn-secondary btn-sm px-4 d-none" id="cancelWaBtn" onclick="cancelWaEdit()">Cancelar</button>
+      </div>
+    </form>
+
+    <div class="mb-3">
+      <label class="form-label small fw-bold text-success">Texto formateado listo para WhatsApp:</label>
+      <textarea id="waResultOutput" class="form-control bg-white font-monospace" rows="8" readonly></textarea>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center mt-5 mb-3">
+      <h5 class="fw-bold text-dark m-0">📚 Historial de Mensajes Diarios Enviados</h5>
+    </div>
+    <div class="row g-2 mb-3 p-2 bg-light rounded border align-items-end">
+      <div class="col-md-2"><label class="form-label small fw-bold">Filtrar por BTS:</label><input type="text" id="filterWaBts" class="form-control form-control-sm" placeholder="Ej: PIU0312" oninput="renderWaHistory()"></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Filtrar por Branch:</label><input type="text" id="filterWaBranch" class="form-control form-control-sm" placeholder="Ej: PIU" oninput="renderWaHistory()"></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Desde (Fecha):</label><input type="date" id="filterWaStartDate" class="form-control form-control-sm" onchange="renderWaHistory()"></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Hasta (Fecha):</label><input type="date" id="filterWaEndDate" class="form-control form-control-sm" onchange="renderWaHistory()"></div>
+      <div class="col-md-4 d-flex gap-2">
+        <button class="btn btn-outline-secondary btn-sm w-50 fw-bold" onclick="clearWaFilters()">❌ Limpiar</button>
+        <button class="btn btn-danger btn-sm w-50 fw-bold" onclick="exportWaHistoryPDF()">📄 Exportar PDF (Filtros)</button>
+      </div>
+    </div>
+
+    <div id="waLoader" class="text-center py-4" style="display:none;">
+      <div class="spinner-border text-success spinner-border-sm" role="status"></div>
+      <span class="text-muted ms-2 small">Cargando historial desde la nube...</span>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-bordered table-hover mb-0 align-middle">
+        <thead class="table-dark"><tr><th>Fecha</th><th>BTS</th><th>Branch</th><th>Clientes Afectados</th><th>Acción</th></tr></thead>
+        <tbody id="waHistoryTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+    </div>
+    <div class="tab-pane fade" id="tab-legal">
+  <!-- CUARTA SECCIÓN: REPORTE DE INCIDENCIAS LEGALES -->
+  <div class="section-container border border-danger">
+    <h4 class="fw-bold text-danger mb-3">⚖️ Reporte de Incidencias Legales en BTS</h4>
+    <form id="legalForm" class="row g-3 p-3 bg-light rounded mb-4 border" onsubmit="saveLegalIncident(event)">
+      <div class="col-md-4"><label class="form-label small fw-bold">1.- BTS (Separar por comas si son varias):</label><input type="text" id="legBts" class="form-control form-control-sm" placeholder="Ej: CAL0056, CAL0121" required oninput="autofillLegalData()"></div>
+      <div class="col-md-4"><label class="form-label small fw-bold">2.- OLT Bitel:</label><input type="text" id="legOlt" class="form-control form-control-sm bg-white" readonly placeholder="Se autocompleta"></div>
+      <div class="col-md-4"><label class="form-label small fw-bold">3.- Branch:</label><input type="text" id="legBranch" class="form-control form-control-sm bg-white" readonly placeholder="Se autocompleta"></div>
+      <div class="col-md-4"><label class="form-label small fw-bold">4.- Cantidad de clientes afectados (Total):</label><input type="text" id="legSubs" class="form-control form-control-sm bg-white" readonly placeholder="Se autocompleta"></div>
+      <div class="col-md-4"><label class="form-label small fw-bold">5.- Fecha:</label><input type="date" id="legDate" class="form-control form-control-sm" required></div>
+      <div class="col-md-4"><label class="form-label small fw-bold">6.- SR Code (Opcional):</label><input type="text" id="legSrCode" class="form-control form-control-sm" placeholder="Ej: SR-987654"></div>
+      <div class="col-md-6"><label class="form-label small fw-bold text-primary">7.- Carta de Legal (PDF opcional):</label><input type="file" id="legPdf" class="form-control form-control-sm" accept="application/pdf" onchange="encodeLegalPdf(event)"><input type="hidden" id="legPdfBase64"></div>
+      <div class="col-md-6"><label class="form-label small fw-bold text-primary">8.- Evidencia fotográfica de la carta ANTES (Opcional):</label><input type="file" id="legPhotos" class="form-control form-control-sm" accept="image/*" multiple onchange="previewCollage(event, 'legalGrid', 'legBts', 'legalTitleBar', 'ANTES BTS')"></div>
+      <div class="col-md-12 text-center" id="legalPreviewWrapper" style="display:none;">
+        <div class="d-flex justify-content-center mt-2">
+          <div class="border rounded bg-white shadow-sm p-3" id="legalCaptureArea">
+            <div id="legalTitleBar" class="collage-title-bar">ANTES BTS</div>
+            <div id="legalGrid" class="collage-grid mb-3"></div>
+          </div>
+        </div>
+        <button type="button" class="btn btn-outline-success btn-sm fw-bold mt-2" onclick="downloadCollagePNG('legBts', 'ANTES', 'legalGrid')">📥 Descargar Collage (ANTES)</button>
+      </div>
+      <div class="col-md-12"><label class="form-label small fw-bold">9.- Acciones Solicitadas / Realizadas:</label><textarea id="legActions" class="form-control form-control-sm" rows="3" required></textarea></div>
+      <div class="col-md-8"><label class="form-label small fw-bold text-primary">10.- Evidencia fotográfica de acciones realizadas DESPUÉS (Opcional):</label><input type="file" id="bitelPhotos" class="form-control form-control-sm" accept="image/*" multiple onchange="previewCollage(event, 'bitelGrid', 'legBts', 'bitelTitleBar', 'FOTOS DESPUÉS BTS')"></div>
+      <div class="col-md-4"><label class="form-label small fw-bold">11.- Deadline (Fecha Límite):</label><input type="date" id="legDeadline" class="form-control form-control-sm" required></div>
+      <div class="col-md-12 text-center" id="bitelPreviewWrapper" style="display:none;">
+        <div class="d-flex justify-content-center mt-2">
+          <div class="border rounded bg-white shadow-sm p-3" id="bitelCaptureArea">
+            <div id="bitelTitleBar" class="collage-title-bar">FOTOS DESPUÉS BTS</div>
+            <div id="bitelGrid" class="collage-grid mb-3"></div>
+          </div>
+        </div>
+        <button type="button" class="btn btn-outline-success btn-sm fw-bold mt-2" onclick="downloadCollagePNG('legBts', 'FOTOS_DESPUES', 'bitelGrid')">📥 Descargar Collage (DESPUÉS)</button>
+      </div>
+      <div class="col-md-12 d-flex justify-content-end gap-2 mt-4">
+        <button type="submit" class="btn btn-danger btn-sm w-25 fw-bold" id="saveLegalBtn">💾 Guardar Reporte Legal</button>
+      </div>
+    </form>
+
+    <div class="d-flex justify-content-between align-items-center mt-5 mb-3"><h5 class="fw-bold text-dark m-0">📚 Historial de Incidencias Legales</h5></div>
+    <div class="row g-2 mb-3 p-2 bg-light rounded border align-items-end">
+      <div class="col-md-2"><label class="form-label small fw-bold">Filtrar BTS:</label><input type="text" id="filterLegBts" class="form-control form-control-sm" oninput="renderLegalHistory()"></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Filtrar Branch:</label><input type="text" id="filterLegBranch" class="form-control form-control-sm" oninput="renderLegalHistory()"></div>
+      <div class="col-md-2"><button class="btn btn-outline-secondary btn-sm w-100 fw-bold" onclick="clearLegFilters()">❌ Limpiar</button></div>
+    </div>
+    <div id="legLoader" class="text-center py-4" style="display:none;"><div class="spinner-border text-danger spinner-border-sm"></div><span class="text-muted ms-2 small">Cargando reportes legales...</span></div>
+    <div class="table-responsive shadow-sm rounded border">
+      <table class="table table-bordered table-hover mb-0 align-middle">
+        <thead class="table-danger"><tr><th>Fecha</th><th>BTS (Múltiples)</th><th>OLT</th><th>Branch</th><th>SR Code</th><th>Deadline</th><th>Acción</th></tr></thead>
+        <tbody id="legalHistoryTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+    </div>
+    <div class="tab-pane fade" id="tab-cortes"><div id="ctBody"><div class="text-center text-muted py-5">Abre esta pestaña para cargar los cortes…</div></div></div>
+    <div class="tab-pane fade" id="tab-tasks">
+  <!-- QUINTA SECCIÓN: SEGUIMIENTO DE TAREAS DIARIAS -->
+  <div class="section-container border border-info">
+    <h4 class="fw-bold text-info mb-3">📅 Seguimiento de Tareas Diarias</h4>
+    <div class="row g-2 mb-4 p-2 bg-white rounded border align-items-end">
+      <div class="col-md-2"><label class="form-label small fw-bold">Categoría:</label><select id="filterTaskCat" class="form-select form-select-sm" onchange="renderTasks()"><option value="">-- Todas --</option><option value="Main">Main</option><option value="Sub">Sub</option></select></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Status:</label><select id="filterTaskStatus" class="form-select form-select-sm" onchange="renderTasks()"><option value="">-- Todos --</option><option value="Finished">Finished</option><option value="In progress">In progress</option><option value="Stand-by">Stand-by</option><option value="Pending">Pending</option></select></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Staff:</label><input type="text" id="filterTaskStaff" class="form-control form-control-sm" placeholder="Buscar nombre..." oninput="renderTasks()"></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Deadline Desde:</label><input type="date" id="filterTaskDStart" class="form-control form-control-sm" onchange="renderTasks()"></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Deadline Hasta:</label><input type="date" id="filterTaskDEnd" class="form-control form-control-sm" onchange="renderTasks()"></div>
+      <div class="col-md-2 d-flex gap-2">
+        <button class="btn btn-outline-secondary btn-sm w-50 fw-bold" onclick="clearTaskFilters()">❌ Limpiar</button>
+        <button class="btn btn-success btn-sm w-50 fw-bold" onclick="exportTasksExcel()">📊 Excel</button>
+      </div>
+    </div>
+
+    <div class="row mb-4">
+      <div class="col-md-6">
+        <div class="card h-100 border-warning shadow-sm">
+          <div class="card-header bg-warning text-dark fw-bold py-2 d-flex justify-content-between align-items-center">
+            <span>⏳ Próximas a Vencer (<= 10 días)</span>
+            <button class="btn btn-sm btn-outline-dark py-0 px-2 fw-bold" onclick="copyUpcomingTasksWa()">📋 Copiar WhatsApp</button>
+          </div>
+          <div class="card-body p-0 table-responsive" style="max-height: 250px; overflow-y: auto;">
+            <table class="table table-sm table-hover mb-0">
+              <thead class="table-light sticky-top"><tr><th>Tarea</th><th>Deadline</th><th>Progreso</th><th>Staff</th></tr></thead>
+              <tbody id="upcomingTasksBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card h-100 border-primary shadow-sm">
+          <div class="card-header bg-primary text-white fw-bold py-2">👥 Resumen por Staff (Según Filtros)</div>
+          <div class="card-body p-0 table-responsive" style="max-height: 250px; overflow-y: auto;">
+            <table class="table table-sm table-hover mb-0">
+              <thead class="table-light sticky-top"><tr><th>Staff</th><th class="text-center">Total Tareas</th><th class="text-center">Progreso Promedio</th></tr></thead>
+              <tbody id="staffSummaryBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mb-4">
+      <h6 class="fw-bold text-dark mb-2">🗓️ Calendario de Tareas (Semana Anterior, Actual y Siguiente)</h6>
+      <div class="table-responsive border rounded bg-white shadow-sm">
+        <table class="calendar-table">
+          <thead><tr><th class="calendar-header">Lunes</th><th class="calendar-header">Martes</th><th class="calendar-header">Miércoles</th><th class="calendar-header">Jueves</th><th class="calendar-header">Viernes</th><th class="calendar-header">Sábado</th><th class="calendar-header">Domingo</th></tr></thead>
+          <tbody id="calendarBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <form id="taskForm" class="row g-3 p-3 bg-light rounded mb-4 border shadow-sm" onsubmit="saveTask(event)">
+      <input type="hidden" id="editTaskId">
+      <div class="col-md-2"><label class="form-label small fw-bold">Category:</label><select id="taskCategory" class="form-select form-select-sm" required><option value="Main">Main</option><option value="Sub">Sub</option></select></div>
+      <div class="col-md-4"><label class="form-label small fw-bold">Task:</label><input type="text" id="taskName" class="form-control form-control-sm" required></div>
+      <div class="col-md-6"><label class="form-label small fw-bold">Detail:</label><input type="text" id="taskDetail" class="form-control form-control-sm"></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Deadline:</label><input type="date" id="taskDeadline" class="form-control form-control-sm" required></div>
+      <div class="col-md-2"><label class="form-label small fw-bold">Status:</label><select id="taskStatus" class="form-select form-select-sm" onchange="toggleDateFinished()" required><option value="Pending">Pending</option><option value="In progress">In progress</option><option value="Stand-by">Stand-by</option><option value="Finished">Finished</option></select></div>
+      <div class="col-md-2 d-none" id="dateFinishedContainer"><label class="form-label small fw-bold text-success">Date of Finished:</label><input type="date" id="taskDateFinished" class="form-control form-control-sm border-success"></div>
+      <div class="col-md-3"><label class="form-label small fw-bold">Target:</label><input type="text" id="taskTarget" class="form-control form-control-sm"></div>
+      <div class="col-md-3"><label class="form-label small fw-bold">KPI Result:</label><input type="text" id="taskKpi" class="form-control form-control-sm"></div>
+      <div class="col-md-3"><label class="form-label small fw-bold">Prog. (%) <small class="text-muted">(Ej: =(75/100))</small>:</label><input type="text" id="taskProgress" class="form-control form-control-sm"></div>
+      <div class="col-md-6">
+        <label class="form-label small fw-bold">Staff (Múltiple):</label>
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary btn-sm dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Seleccionar Staff...</button>
+          <ul class="dropdown-menu p-2 w-100 shadow" id="staffDropdownList" style="max-height: 200px; overflow-y: auto;"></ul>
+        </div>
+        <input type="hidden" id="taskStaff" required>
+      </div>
+      <div class="col-md-3"><label class="form-label small fw-bold text-primary">Adjuntar Foto (Opcional):</label><input type="file" id="taskPhoto" class="form-control form-control-sm" accept="image/*"></div>
+      <div class="col-md-12 d-flex justify-content-end gap-2 mt-3">
+        <button type="submit" class="btn btn-info btn-sm fw-bold text-white px-4" id="saveTaskBtn">💾 Guardar Tarea</button>
+        <button type="button" class="btn btn-secondary btn-sm px-4 d-none" id="cancelTaskBtn" onclick="cancelEditTask()">Cancelar</button>
+      </div>
+    </form>
+
+    <div id="taskLoader" class="text-center py-4" style="display:none;"><div class="spinner-border text-info spinner-border-sm"></div><span class="text-muted ms-2 small">Cargando tareas...</span></div>
+    <div class="table-responsive shadow-sm rounded border">
+      <table class="table table-bordered table-hover mb-0 align-middle">
+        <thead style="background-color: #002266; color: white; white-space: nowrap;">
+          <tr><th>Category</th><th>Task</th><th>Detail</th><th>Status</th><th>Time Status</th><th>Deadline</th><th>Date Finished</th><th>Target</th><th>KPI Result</th><th>Progress (%)</th><th>Staff</th><th>Acción</th></tr>
+        </thead>
+        <tbody id="taskTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL TAREA -->
+<div class="modal fade" id="taskDetailModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header bg-info text-white"><h5 class="modal-title fw-bold">Detalle de la Tarea</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="row mb-2"><div class="col-sm-3 fw-bold">Category:</div><div class="col-sm-9" id="mdlT-category"></div></div>
+        <div class="row mb-2"><div class="col-sm-3 fw-bold">Task:</div><div class="col-sm-9" id="mdlT-task"></div></div>
+        <div class="row mb-2"><div class="col-sm-3 fw-bold">Detail:</div><div class="col-sm-9" id="mdlT-detail"></div></div>
+        <div class="row mb-2"><div class="col-sm-3 fw-bold">Status:</div><div class="col-sm-3" id="mdlT-status"></div><div class="col-sm-3 fw-bold">Time Status:</div><div class="col-sm-3" id="mdlT-time"></div></div>
+        <div class="row mb-2"><div class="col-sm-3 fw-bold">Deadline:</div><div class="col-sm-3" id="mdlT-deadline"></div><div class="col-sm-3 fw-bold">Date Finished:</div><div class="col-sm-3" id="mdlT-datefin"></div></div>
+        <div class="row mb-2"><div class="col-sm-3 fw-bold">Target:</div><div class="col-sm-9" id="mdlT-target"></div></div>
+        <div class="row mb-2"><div class="col-sm-3 fw-bold">KPI Result:</div><div class="col-sm-9" id="mdlT-kpi"></div></div>
+        <div class="row mb-2"><div class="col-sm-3 fw-bold">Progress:</div><div class="col-sm-9" id="mdlT-progress"></div></div>
+        <div class="row mb-3"><div class="col-sm-3 fw-bold">Staff:</div><div class="col-sm-9" id="mdlT-staff"></div></div>
+        <div class="row border-top pt-3"><div class="col-12 text-center"><h6 class="fw-bold text-secondary mb-2">Fotografía Adjunta</h6><div id="mdlT-photoBox" class="p-2 border rounded bg-light d-flex justify-content-center align-items-center" style="min-height: 200px;"></div></div></div>
+      </div>
+      <div class="modal-footer d-flex justify-content-between">
+        <button type="button" class="btn btn-outline-danger btn-sm" id="mdlT-deleteBtn">🗑️ Eliminar</button>
+        <div>
+          <button type="button" class="btn btn-secondary btn-sm me-2" data-bs-dismiss="modal">Cerrar</button>
+          <button type="button" class="btn btn-info btn-sm text-white fw-bold" id="mdlT-editBtn">✏️ Editar en Formulario</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL WHATSAPP -->
+<div class="modal fade" id="waDetailModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header bg-success text-white">
+        <h5 class="modal-title fw-bold">Detalle del Mensaje Diario y Collage</h5>
+        <div>
+          <button type="button" class="btn btn-outline-light btn-sm fw-bold me-3" onclick="copyModalText()">📋 Copiar Texto</button>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+      </div>
+      <div class="modal-body row">
+        <div class="col-md-4 border-end">
+          <label class="form-label fw-bold text-success">Texto Escrito para WhatsApp:</label>
+          <textarea id="modalWaText" class="form-control font-monospace bg-light" rows="18" readonly></textarea>
+        </div>
+        <div class="col-md-8 text-center">
+          <label class="form-label fw-bold text-danger mb-3">Collage Fotográfico Guardado:</label>
+          <div id="modalWaCollageBox" class="p-2 border rounded bg-white d-flex justify-content-center align-items-center mb-3" style="min-height: 400px;"></div>
+          <button type="button" class="btn btn-outline-success btn-sm fw-bold" onclick="downloadModalCollage()">📥 Descargar Collage</button>
+        </div>
+      </div>
+      <div class="modal-footer d-flex justify-content-between">
+        <button type="button" class="btn btn-success btn-sm fw-bold" id="mdlWa-editBtn">✏️ Editar en Formulario</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL LEGAL -->
+<div class="modal fade" id="legalDetailModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title fw-bold">Detalle del Reporte Legal</h5>
+        <div>
+          <button type="button" class="btn btn-outline-light btn-sm fw-bold me-3" onclick="copyLegalWa()">📋 Copiar a WhatsApp</button>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+      </div>
+      <div class="modal-body row" id="legalModalCaptureArea">
+        <div class="col-md-6 border-end">
+          <h6 class="fw-bold text-danger border-bottom pb-2">Información y Acciones</h6>
+          <p><strong>BTS:</strong> <span id="mdlL-bts"></span></p>
+          <p><strong>OLT:</strong> <span id="mdlL-olt"></span></p>
+          <p><strong>Branch:</strong> <span id="mdlL-branch"></span></p>
+          <p><strong>Clientes Afectados:</strong> <span id="mdlL-subs"></span></p>
+          <p><strong>SR Code:</strong> <span id="mdlL-srCode"></span></p>
+          <p><strong>Acciones Realizadas:</strong></p>
+          <div id="mdlL-actions" class="p-2 bg-light border rounded mb-3" style="min-height: 80px; white-space: pre-wrap;"></div>
+          <p><strong>Carta PDF Legal:</strong></p>
+          <div id="mdlL-pdfBox" class="mb-3 text-center"></div>
+        </div>
+        <div class="col-md-6 text-center">
+          <h6 class="fw-bold text-primary border-bottom pb-2">Evidencias Fotográficas</h6>
+          <div class="mb-4">
+            <p class="small fw-bold mt-3 mb-1">Evidencia ANTES (Carta):</p>
+            <div id="mdlL-photoCarta" class="p-2 border rounded bg-light d-flex justify-content-center align-items-center mb-2" style="min-height: 200px;"></div>
+            <button class="btn btn-sm btn-outline-primary fw-bold" onclick="downloadModalImage('mdlL-photoCarta', 'ANTES')">📥 Descargar ANTES</button>
+          </div>
+          <div>
+            <p class="small fw-bold mb-1">Evidencia DESPUÉS (Acciones Bitel):</p>
+            <div id="mdlL-photoBitel" class="p-2 border rounded bg-light d-flex justify-content-center align-items-center mb-2" style="min-height: 200px;"></div>
+            <button class="btn btn-sm btn-outline-primary fw-bold" onclick="downloadModalImage('mdlL-photoBitel', 'DESPUES')">📥 Descargar DESPUÉS</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer d-flex justify-content-between">
+        <button type="button" class="btn btn-outline-danger btn-sm" id="mdlL-deleteBtn">🗑️ Eliminar Reporte</button>
+        <div>
+          <button type="button" class="btn btn-outline-dark btn-sm fw-bold me-2" onclick="downloadCombinedLegalImage()">📸 Descargar ANTES Y DESPUÉS Juntos</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Pestaña Cortes: ventana para subir coberturas y aviso flotante -->
+<div class="modal fade" id="ctModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+    <div class="modal-header py-2"><h6 class="modal-title fw-bold" id="ctModalTitle">Cobertura</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body" id="ctModalBody"></div>
+    <div class="modal-footer py-2"><button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button><button class="btn btn-primary btn-sm fw-bold d-none" id="ctModalOk">Guardar</button></div>
+  </div></div>
+</div>
+<div class="dr-toast" id="ctToast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/api.js"></script>
+<script src="js/daily-report.js"></script>
+<script src="js/demo-data.js"></script>
+<script src="js/app.js"></script>
+<script src="js/kmz-index.js"></script>
+<script src="js/cortes-core.js"></script>
+<script src="js/cortes.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

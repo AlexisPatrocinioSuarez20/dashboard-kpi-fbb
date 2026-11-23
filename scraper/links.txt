@@ -1,0 +1,5 @@
+# Un link por línea (puedes poner un nombre antes del link). Las líneas con # se ignoran.
+Cortes programados Hidrandina	https://aplicaciones.distriluz.com.pe/Apps/Visits/Home/CortesProgramados
+Cortes programados SEAL	https://www.seal.com.pe/clientes/SitePages/Cortes.aspx
+Cortes programados Electro Sur Este (Cusco)	https://www.else.com.pe/else/interrupciones-programadas/?year=2026
+# Pendientes (aún sin lector): Electrocentro, Enel/Pluz, Luz del Sur, ENOSA, Electro Oriente

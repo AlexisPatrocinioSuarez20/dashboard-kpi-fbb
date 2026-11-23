@@ -1,0 +1,7 @@
+requests>=2.28
+beautifulsoup4>=4.11
+lxml>=4.9
+openpyxl>=3.1
+# Opcional, para leer el texto de las imágenes de Electro Sur Este (requiere instalar Tesseract-OCR con idioma español):
+# pytesseract>=0.3.10
+# Pillow>=10.0

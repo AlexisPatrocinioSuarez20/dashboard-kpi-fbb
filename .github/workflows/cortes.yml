@@ -1,0 +1,35 @@
+name: Actualizar cortes programados
+
+on:
+  schedule:
+    - cron: "17 10,16,22 * * *"   # 05:17, 11:17 y 17:17 hora de Lima
+  workflow_dispatch: {}            # botón "Run workflow" para correrlo a mano
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cortes
+  cancel-in-progress: false
+
+jobs:
+  cortes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r scraper/requirements.txt
+      - name: Leer páginas de las empresas y ubicar los cortes
+        env:
+          NOMINATIM_EMAIL: ${{ vars.NOMINATIM_EMAIL }}
+        run: python scraper/cortes_ftth.py --links-file scraper/links.txt --json data/cortes.json --dias 7
+      - name: Publicar cambios
+        run: |
+          git config user.name "cortes-bot"
+          git config user.email "cortes-bot@users.noreply.github.com"
+          git add data/cortes.json scraper/geocache.json
+          git diff --cached --quiet || git commit -m "Cortes programados $(TZ=America/Lima date '+%Y-%m-%d %H:%M')"
+          git push
