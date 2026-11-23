@@ -69,6 +69,7 @@
     S.started = true;
     $('ctBody').innerHTML = '<div class="text-center text-muted py-5"><div class="spinner-border text-primary mb-2"></div><div>Cargando cortes y coberturas…</div></div>';
     await Promise.all([cargarCortes(), cargarCobertura('FTTH'), cargarCobertura('ODN'), cargarClientes()]);
+    armonizarBranches();
     construir();
     recalcular();
   }
@@ -76,23 +77,40 @@
   // ---------- cálculo ----------
   function recalcular() {
     if (!S.data) return;
-    S.res = C.cruzar(S.data.cortes || [], [S.nets.FTTH, S.nets.ODN], { ref: S.ref, incluirAprox: S.aprox });
+    S.res = C.cruzar(S.data.cortes || [], redes(), { ref: S.ref, incluirAprox: S.aprox });
     pintar();
   }
   function visibles() {
-    const net = S.nets.FTTH;
+    const net = redes().length > 0;
     return S.res.filter(r => {
       if (Math.abs(r.dif) > S.dias) return false;
       if (S.soloRed && net && !r.afecta) return false;
-      if (S.branch && net) { if (![...r.zones].some(z => net.zones[z].branch === S.branch)) return false; }
+      if (S.branch && net) { if (!redes().some(n => r.hits[n.tipo] && [...r.hits[n.tipo].zones].some(z => n.zones[z].branch === S.branch))) return false; }
       return true;
     }).sort((a, b) => (a.fechas[0] + (a.c.ini || '')).localeCompare(b.fechas[0] + (b.c.ini || '')));
   }
-  function resumenDe(r) { return C.resumen([r], S.nets.FTTH, S.clientes); }
+  function redes() { return [S.nets.FTTH, S.nets.ODN].filter(Boolean); }
+  // Si un archivo nombra el branch distinto (p. ej. "La Libertad" vs "LAL"), usar el nombre del archivo con NAP para la misma OLT
+  function armonizarBranches() {
+    const ns = redes(); if (ns.length < 2) return;
+    const ref = ns.find(n => n.naps.length) || ns[0];
+    const porOlt = {}; ref.zones.forEach(z => { if (z.olt) porOlt[z.olt] = z.branch; });
+    ns.forEach(n => { if (n === ref) return;
+      n.zones.forEach(z => { if (z.olt && porOlt[z.olt]) z.branch = porOlt[z.olt]; });
+      n.branches = [...new Set(n.zones.map(z => z.branch))]; });
+  }
+  function resumenDe(r) { return C.resumen([r], redes(), S.clientes); }
+  function cliTxt(s) {
+    if (!s.olts.length) return '—';
+    const conDato = s.porOlt.filter(x => x.act !== undefined);
+    if (!conDato.length) return '—';
+    if (s.clientesMax > s.clientes) return (s.clientes ? '~' + fmtN(s.clientes) + ' · ' : '') + 'máx. ' + fmtN(s.clientesMax);
+    return '~' + fmtN(s.clientes);
+  }
 
   // ---------- estructura ----------
   function construir() {
-    const branches = S.nets.FTTH ? S.nets.FTTH.branches : [];
+    const branches = [...new Set(redes().flatMap(n => n.branches))].sort();
     $('ctBody').innerHTML = `
       <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
         <div class="me-auto">
@@ -162,7 +180,7 @@
 
   // ---------- pintar todo ----------
   function pintar() {
-    const net = S.nets.FTTH;
+    const net = redes().length > 0;
     const vis = visibles();
     const hoy = vis.filter(r => r.dif === 0);
     const prox = vis.filter(r => r.dif > 0);
@@ -179,12 +197,14 @@
       if (i && i.error) return `<span class="ct-cob bad">${t}: error al leer (${esc(i.error)})</span>`;
       if (!n) return `<span class="ct-cob off">${t}: sin cargar — usa “⬆ Subir cobertura”</span>`;
       const st = n.stats || {};
-      return `<span class="ct-cob ok" title="${esc(n.archivo)}">${t}: <b>${esc(n.archivo)}</b> · ${fmtN(st.branches)} branch · ${fmtN(st.zonas)} zonas · ${fmtN(st.olt)} OLT · ${fmtN(st.hub)} HUBBOX · ${fmtN(st.nap)} ODB/NAP · subido ${i && i.subidoEl ? esc(i.subidoEl.slice(0, 10)) + ' por ' + esc(i.subidoPor) : ''}</span>`;
+      return `<span class="ct-cob ok" title="${esc(n.archivo)}">${t}: <b>${esc(n.archivo)}</b> · ${fmtN(st.branches)} branch · ${fmtN(st.zonas)} zonas · ${fmtN(st.olt)} OLT · ${fmtN(st.cobertura || 0)} polígonos · ${fmtN(st.hub)} HUBBOX · ${fmtN(st.nap)} ODB/NAP · subido ${i && i.subidoEl ? esc(i.subidoEl.slice(0, 10)) + ' por ' + esc(i.subidoPor) : ''}</span>`;
     }).join('');
-    $('ctAviso').innerHTML = !net ? '<div class="alert alert-info py-2 small">Aún no hay cobertura FTTH cargada: se muestran los cortes, pero no qué Branch/BTS/OLT/NAP afectan. Usa <b>⬆ Subir cobertura → Cobertura FTTH</b>.</div>' : '';
+    const sinNap = net && !redes().some(n => n.naps.length);
+    $('ctAviso').innerHTML = !net ? '<div class="alert alert-info py-2 small">Aún no hay cobertura cargada: se muestran los cortes, pero no qué Branch/BTS/OLT/NAP afectan. Usa <b>⬆ Subir cobertura</b>.</div>'
+      : sinNap ? '<div class="alert alert-info py-2 small">La cobertura cargada solo tiene <b>polígonos</b>: el cruce muestra Branch, BTS y OLT por zona, y los clientes como máximo. Para ver <b>HUBBOX y ODB/NAP</b>, sube también el KMZ de red (el que tiene las carpetas HB01… y los puntos SB…) en <b>⬆ Subir cobertura → Cobertura ODN</b>.</div>' : '';
 
     // KPIs del día
-    const s = C.resumen(hoy, net, S.clientes);
+    const s = C.resumen(hoy, redes(), S.clientes);
     const card = (t, v, sub, cls = '') => `<div class="card kpi-card ct-kpi ${cls}"><div class="card-body p-3"><div class="small text-muted fw-semibold">${t}</div><div class="kpi-number">${v}</div><div class="ct-kpi-sub">${sub || ''}</div></div></div>`;
     const sinCli = s.cliSinDato.length ? `<span class="text-warning" title="OLT sin dato Active en la hoja: ${esc(s.cliSinDato.join(', '))}">⚠ ${s.cliSinDato.length} OLT sin dato</span>` : 'según Active por OLT';
     $('ctKpis').innerHTML =
@@ -193,10 +213,9 @@
       card('BTS', fmtN(s.bts.length), chips(s.bts, 8)) +
       card('OLT', fmtN(s.olts.length), chips(s.olts, 6)) +
       card('Duración del día', s.ini ? `${s.ini} – ${s.fin}` : '—', s.dur !== null ? C.fmtDur(s.dur) + ' (primer inicio → último fin)' : 'sin horario') +
-      card('Clientes afectados', !net ? '—' : (sinDatoTotal(s) ? '—' : '~' + fmtN(s.clientes)), net ? sinCli : 'sube la cobertura FTTH') +
-      card('HUBBOX', fmtN(s.hubs.length), chips(s.hubs.map(h => hubName(h)), 4)) +
-      card('ODB (cajas NAP)', fmtN(s.naps.length), s.lines.length ? `${fmtN(s.lines.length)} tramos de fibra cerca` : '') +
-      (S.nets.ODN ? card('Elementos ODN', fmtN(s.odn.length), 'puntos ODN dentro del área') : '');
+      card('Clientes afectados', net ? cliTxt(s) : '—', net ? sinCli : 'sube la cobertura') +
+      card('HUBBOX', fmtN(s.hubs.length), chips(s.hubs, 4)) +
+      card('ODB (cajas NAP)', fmtN(s.naps.length), s.lines.length ? `${fmtN(s.lines.length)} tramos de fibra cerca` : '');
 
     // lista de hoy
     $('ctHoyFecha').textContent = fmtFecha(S.ref);
@@ -205,7 +224,7 @@
       return `<div class="ct-item" data-id="${esc(r.c.id)}">
         <div class="d-flex justify-content-between"><b>${esc(r.c.ini || '?')}–${esc(r.c.fin || '?')}</b><span class="badge bg-light text-dark border">${esc(r.c.empresa)}</span></div>
         <div class="small">${esc(r.c.distrito || r.c.provincia || r.c.region)} · ${esc(resumenTexto(r.c))}</div>
-        ${net ? `<div class="small text-muted">${rs.olts.length ? 'OLT ' + esc(rs.olts.join(', ')) : 'sin red FTTH cerca'} · ${fmtN(rs.naps.length)} NAP · ~${fmtN(rs.clientes)} cli.</div>` : ''}
+        ${net ? `<div class="small text-muted">${rs.olts.length ? 'OLT ' + esc(rs.olts.join(', ')) : 'sin red cerca'} · ${fmtN(rs.naps.length)} NAP · ${cliTxt(rs)} cli.</div>` : ''}
       </div>`;
     }).join('') : '<div class="text-muted small">No hay cortes para esta fecha con los filtros actuales.</div>';
     document.querySelectorAll('#ctHoy .ct-item').forEach(el => el.addEventListener('click', () => seleccionar(el.dataset.id)));
@@ -219,18 +238,14 @@
     if (S.sel) mostrarDetalle(S.sel, false);
   }
 
-  function sinDatoTotal(s) { const k = Object.keys(s.napsPorOlt).length; return k > 0 && s.cliSinDato.length === k; }
   function resumenTexto(c) {
     const t = (c.titulo || c.texto || '').replace(/\s+/g, ' ').trim();
     return t.length > 90 ? t.slice(0, 89) + '…' : t;
   }
-  function hubName(h) {
-    const net = S.nets.FTTH; const H = net.hubs[h]; const Z = net.zones[H.z];
-    return (Z.olt || Z.n) + ' ' + H.n;
-  }
+  function hubName(net, h) { const H = net.hubs[h]; const Z = net.zones[H.z]; return (Z.olt || Z.n) + ' ' + H.n; }
 
   function tabla(id, rs, futuro) {
-    const net = S.nets.FTTH;
+    const net = redes().length > 0;
     const head = `<thead><tr><th>Fecha</th><th>Horario</th><th>Duración</th><th>Empresa</th><th>Zona del corte</th>${net ? '<th>Branch</th><th>BTS</th><th>OLT</th><th>Clientes</th><th>HUBBOX</th><th>ODB</th>' : ''}<th>Ubicación</th></tr></thead>`;
     if (!rs.length) { $(id).innerHTML = head + `<tbody><tr><td colspan="12" class="text-muted">${futuro ? 'Sin cortes próximos' : 'Sin cortes recientes'} con los filtros actuales.</td></tr></tbody>`; return; }
     $(id).innerHTML = head + '<tbody>' + rs.map(r => {
@@ -243,7 +258,7 @@
         <td>${C.fmtDur(r.dur)}</td>
         <td>${esc(r.c.empresa)}</td>
         <td class="ct-wrap" title="${esc(r.c.texto)}"><b>${esc(r.c.distrito || r.c.provincia || r.c.region)}</b> · ${esc(resumenTexto(r.c))}</td>
-        ${net ? `<td>${esc(s.branches.join(', '))}</td><td class="ct-wrap">${esc(s.bts.join(', '))}</td><td class="ct-wrap">${esc(s.olts.join(', '))}</td><td>${s.naps.length && !sinDatoTotal(s) ? '~' + fmtN(s.clientes) : '—'}</td><td>${fmtN(s.hubs.length)}</td><td>${fmtN(s.naps.length)}</td>` : ''}
+        ${net ? `<td>${esc(s.branches.join(', '))}</td><td class="ct-wrap">${esc(s.bts.join(', '))}</td><td class="ct-wrap">${esc(s.olts.join(', '))}</td><td>${cliTxt(s)}</td><td>${fmtN(s.hubs.length)}</td><td>${fmtN(s.naps.length)}</td>` : ''}
         <td><span class="ct-conf ct-conf-${confTxt}">${confTxt}</span>${r.c.estado === 'SUSPENDIDO' ? ' <span class="badge bg-secondary">Suspendido</span>' : ''}</td>
       </tr>`;
     }).join('') + '</tbody>';
@@ -256,12 +271,9 @@
     const r = S.res.find(x => x.c.id === id);
     const box = $('ctDetalle');
     if (!r) { box.style.display = 'none'; return; }
-    const net = S.nets.FTTH, s = resumenDe(r), c = r.c;
-    const napList = net ? s.naps.map(i => { const n = net.naps[i]; const Z = net.zones[n.z]; return `${Z.olt || Z.n} ${n.h >= 0 ? net.hubs[n.h].n + '/' : ''}${n.n}`; }).sort() : [];
-    const porOlt = Object.entries(s.napsPorOlt).map(([o, k]) => {
-      const act = S.clientes && S.clientes[o], tot = net.napsPerOlt[o] || k;
-      return `<tr><td>${esc(o)}</td><td>${k} / ${tot}</td><td>${act === undefined ? '<span class="text-warning">sin dato</span>' : fmtN(act)}</td><td>${act === undefined ? '—' : '~' + fmtN(Math.round(act * Math.min(1, k / tot)))}</td></tr>`;
-    }).join('');
+    const net = redes().length > 0, s = resumenDe(r), c = r.c;
+    const napList = s.naps;
+    const porOlt = s.porOlt.map(x => `<tr><td>${esc(x.olt)}</td><td>${x.tot ? x.nap + ' / ' + x.tot : '<span class="text-muted">por zona de cobertura</span>'}</td><td>${x.act === undefined ? '<span class="text-warning">sin dato</span>' : fmtN(x.act)}</td><td>${x.act === undefined ? '—' : x.est !== undefined ? '~' + fmtN(x.est) : 'máx. ' + fmtN(x.max)}</td></tr>`).join('');
     box.style.display = '';
     box.innerHTML = `
       <div class="d-flex align-items-start gap-2 mb-2">
@@ -283,11 +295,12 @@
             <div class="col-sm-4"><b>BTS:</b> ${chips(s.bts)}</div>
             <div class="col-sm-4"><b>OLT:</b> ${chips(s.olts)}</div>
           </div>
-          <table class="table table-sm ct-mini mb-2"><thead><tr><th>OLT</th><th>NAP afectadas / total</th><th>Activos (hoja)</th><th>Clientes afectados</th></tr></thead><tbody>${porOlt || '<tr><td colspan="4" class="text-muted">Ninguna NAP dentro del área</td></tr>'}</tbody></table>
-          <div class="small"><b>HUBBOX (${s.hubs.length}):</b> ${chips(s.hubs.map(hubName), 30)}</div>
+          <table class="table table-sm ct-mini mb-2"><thead><tr><th>OLT</th><th>NAP afectadas / total</th><th>Activos (hoja)</th><th>Clientes afectados</th></tr></thead><tbody>${porOlt || '<tr><td colspan="4" class="text-muted">Ninguna OLT dentro del área</td></tr>'}</tbody></table>
+          <div class="small"><b>Zonas de cobertura (${s.zonas.length}):</b> ${chips(s.zonas, 30)}</div>
+          <div class="small mt-1"><b>HUBBOX (${s.hubs.length}):</b> ${chips(s.hubs, 30)}</div>
           <div class="small mt-1"><b>ODB / NAP (${napList.length}):</b> ${chips(napList, 60)}</div>
           ${s.lines.length ? `<div class="small mt-1 text-muted">${s.lines.length} tramos de fibra (mensajero/ADSS) pasan por el área del corte.</div>` : ''}
-          ${S.nets.ODN ? `<div class="small mt-1"><b>Elementos ODN:</b> ${fmtN(r.odn.size)} puntos, ${fmtN(r.odnLines.size)} rutas</div>` : ''}` : '<div class="text-muted small">Sube la cobertura FTTH para ver la red afectada.</div>'}
+` : '<div class="text-muted small">Sube la cobertura para ver la red afectada.</div>'}
         </div>
       </div>`;
     $('ctCerrarDet').addEventListener('click', () => { S.sel = null; box.style.display = 'none'; pintarMapa(visibles()); });
@@ -311,7 +324,7 @@
     L.control.layers(null, {
       'Cortes (rojo hoy · naranja próximos · gris pasados)': S.layers.cortes,
       'ODB/NAP afectadas': S.layers.naps, 'HUBBOX afectados': S.layers.hubs, 'Fibra cerca del corte': S.layers.fibra,
-      'Elementos ODN afectados': S.layers.odn, 'Zonas FTTH (cobertura)': S.layers.zonas, 'Todas las NAP': S.layers.todas
+      'Zonas de cobertura afectadas': S.layers.odn, 'Zonas FTTH (cobertura)': S.layers.zonas, 'Todas las NAP': S.layers.todas
     }, { collapsed: true }).addTo(S.map);
     const leyenda = L.control({ position: 'bottomleft' });
     leyenda.onAdd = () => { const d = L.DomUtil.create('div', 'ct-legend'); d.innerHTML = `<span style="background:${COLOR.hoy}"></span>Hoy <span style="background:${COLOR.prox}"></span>Próximo <span style="background:${COLOR.pas}"></span>Pasado <span style="background:#7c3aed"></span>HUBBOX <span style="background:#be123c"></span>NAP`; return d; };
@@ -323,9 +336,10 @@
   function pintarRedBase() {
     if (!S.map) return;
     S.layers.zonas.clearLayers(); S.layers.todas.clearLayers();
-    const net = S.nets.FTTH; if (!net) return;
-    net.zones.forEach(z => z.poly.forEach(p => L.polygon(p, { color: '#2563eb', weight: 1, fillOpacity: 0.05 }).bindTooltip(`${z.branch} · ${z.n}`).addTo(S.layers.zonas)));
-    net.naps.forEach(n => L.circleMarker([n.la, n.lo], { radius: 2, color: '#1d4ed8', weight: 0, fillOpacity: 0.6 }).addTo(S.layers.todas));
+    redes().forEach(net => {
+      net.zones.forEach(z => z.poly.forEach(p => L.polygon(p, { color: '#2563eb', weight: 1, fillOpacity: 0.05 }).bindTooltip(`${z.branch} · ${z.n}`).addTo(S.layers.zonas)));
+      net.naps.forEach(n => L.circleMarker([n.la, n.lo], { radius: 2, color: '#1d4ed8', weight: 0, fillOpacity: 0.6 }).addTo(S.layers.todas));
+    });
   }
   function geomLayer(f, color, weight) {
     if (f.t === 'line') return L.polyline(f.p, { color, weight: weight || 5, opacity: 0.85 });
@@ -335,28 +349,29 @@
   function boundsDe(r) {
     const pts = [];
     (r.c.f || []).forEach(f => f.p.forEach(part => part.forEach(p => pts.push(p))));
-    const net = S.nets.FTTH;
-    if (net) r.naps.forEach(i => pts.push([net.naps[i].la, net.naps[i].lo]));
+    redes().forEach(net => { const H = r.hits[net.tipo]; if (H) H.naps.forEach(i => pts.push([net.naps[i].la, net.naps[i].lo])); });
     return pts.length ? L.latLngBounds(pts) : null;
   }
   function pintarMapa(vis) {
     if (!S.map) return;
     ['cortes', 'fibra', 'hubs', 'naps', 'odn'].forEach(k => S.layers[k].clearLayers());
-    const net = S.nets.FTTH, odn = S.nets.ODN;
     const solo = S.sel ? vis.filter(r => r.c.id === S.sel) : vis;
-    const napSet = new Map(), hubSet = new Map(), lineSet = new Map(), odnSet = new Set();
+    const sets = {};
+    redes().forEach(n => { sets[n.tipo] = { naps: new Set(), hubs: new Set(), lines: new Set(), zonas: new Set() }; });
     solo.forEach(r => {
       const col = colorDif(r.dif);
       const pop = `<b>${esc(r.c.empresa)}</b> · ${r.fechas.map(fmtFecha).join(', ')} ${esc(r.c.ini || '')}–${esc(r.c.fin || '')}<br>${esc(r.c.distrito || r.c.provincia || '')}: ${esc(resumenTexto(r.c))}<br><a href="#" data-ct="${esc(r.c.id)}">Ver detalle</a>`;
       (r.c.f || []).forEach(f => { const lyr = geomLayer(f, col); lyr.bindPopup(pop + `<div class="small text-muted">${esc(f.n)} · confianza ${CONF[f.pr]}</div>`); lyr.addTo(S.layers.cortes); });
-      r.naps.forEach(i => napSet.set(i, r.dif)); r.hubs.forEach(i => hubSet.set(i, r.dif)); r.lines.forEach(i => lineSet.set(i, r.dif)); r.odn.forEach(i => odnSet.add(i));
+      redes().forEach(n => { const H = r.hits[n.tipo], T = sets[n.tipo]; if (!H) return;
+        H.naps.forEach(i => T.naps.add(i)); H.hubs.forEach(i => T.hubs.add(i)); H.lines.forEach(i => T.lines.add(i)); H.zonasCob.forEach(i => T.zonas.add(i)); });
     });
-    if (net) {
-      lineSet.forEach((d, i) => L.polyline(net.lines[i].pts, { color: '#a21caf', weight: 2, opacity: 0.7 }).addTo(S.layers.fibra));
-      hubSet.forEach((d, i) => { const h = net.hubs[i]; if (h.p) L.circleMarker(h.p, { radius: 7, color: '#fff', weight: 2, fillColor: '#7c3aed', fillOpacity: 1 }).bindTooltip(hubName(i)).addTo(S.layers.hubs); });
-      napSet.forEach((d, i) => { const n = net.naps[i], Z = net.zones[n.z]; L.circleMarker([n.la, n.lo], { radius: 4, color: '#be123c', weight: 1, fillOpacity: 0.9 }).bindTooltip(`${Z.olt || Z.n} · ${n.h >= 0 ? net.hubs[n.h].n + ' · ' : ''}${n.n}`).addTo(S.layers.naps); });
-    }
-    if (odn) odnSet.forEach(i => { const n = odn.naps[i]; L.circleMarker([n.la, n.lo], { radius: 4, color: '#0f766e', weight: 1, fillOpacity: 0.9 }).bindTooltip('ODN · ' + n.n).addTo(S.layers.odn); });
+    redes().forEach(net => {
+      const T = sets[net.tipo];
+      T.zonas.forEach(z => { const Z = net.zones[z]; Z.poly.forEach(p => L.polygon(p, { color: '#e11d48', weight: 2, fillColor: '#e11d48', fillOpacity: 0.08 }).bindTooltip(`Zona afectada: ${Z.branch} · ${Z.n}`).addTo(S.layers.odn)); });
+      T.lines.forEach(i => L.polyline(net.lines[i].pts, { color: '#a21caf', weight: 2, opacity: 0.7 }).addTo(S.layers.fibra));
+      T.hubs.forEach(i => { const h = net.hubs[i]; if (h.p) L.circleMarker(h.p, { radius: 7, color: '#fff', weight: 2, fillColor: '#7c3aed', fillOpacity: 1 }).bindTooltip(hubName(net, i)).addTo(S.layers.hubs); });
+      T.naps.forEach(i => { const n = net.naps[i], Z = net.zones[n.z]; L.circleMarker([n.la, n.lo], { radius: 4, color: '#be123c', weight: 1, fillOpacity: 0.9 }).bindTooltip(`${Z.olt || Z.n} · ${n.h >= 0 ? net.hubs[n.h].n + ' · ' : ''}${n.n}`).addTo(S.layers.naps); });
+    });
   }
   document.addEventListener('click', e => {
     const a = e.target.closest && e.target.closest('a[data-ct]');
@@ -390,9 +405,11 @@
       return `<tr><td>${esc(b)}</td><td>${zs.length}</td><td>${new Set(zs.map(z => z.olt).filter(Boolean)).size}</td><td>${idx.hubs.filter(h => zi.has(h[0])).length}</td><td>${fmtN(idx.naps.filter(n => zi.has(n[0])).length)}</td></tr>`;
     }).join('');
     const sinOlt = idx.zones.filter(z => !z.olt).map(z => z.n);
+    const soloPol = !idx.naps.length;
     $('ctModalBody').innerHTML = `
       <div class="mb-2">Se encontró: <b>${fmtN(st.branches)}</b> branch · <b>${fmtN(st.zonas)}</b> zonas · <b>${fmtN(st.bts)}</b> BTS · <b>${fmtN(st.olt)}</b> OLT · <b>${fmtN(st.hub)}</b> HUBBOX · <b>${fmtN(st.nap)}</b> ODB/NAP · ${fmtN(idx.lines.length)} tramos de fibra.</div>
       <div class="table-responsive" style="max-height:260px"><table class="table table-sm ct-mini"><thead><tr><th>Branch</th><th>Zonas</th><th>OLT</th><th>HUBBOX</th><th>NAP</th></tr></thead><tbody>${porB}</tbody></table></div>
+      ${soloPol ? `<div class="alert alert-info py-2 small mb-2">Este archivo solo tiene polígonos de cobertura (${fmtN(idx.zones.reduce((a, z) => a + z.c.length, 0))}): el cruce dará Branch, BTS y OLT por zona. Los HUBBOX y ODB/NAP salen del KMZ de red (carpetas HB01…, puntos SB…).</div>` : ''}
       ${sinOlt.length ? `<div class="alert alert-warning py-2 small mb-2">${sinOlt.length} zona(s) sin OLT en el nombre (sus NAP saldrán sin OLT): ${esc(sinOlt.join(' · '))}</div>` : ''}
       <div class="small text-muted">Al guardar, reemplaza la cobertura ${tipo} anterior para todo el equipo (${(b64.length / 1024).toFixed(0)} KB en la hoja, pestaña COB_${tipo}).</div>`;
     const ok = $('ctModalOk');
@@ -401,7 +418,7 @@
       ok.disabled = true; ok.textContent = 'Guardando…';
       try {
         const info = await callGAS('saveCoverage', tipo, { archivo: nombre, stats: idx.stats, creado: idx.creado }, b64);
-        S.infos[tipo] = info; S.nets[tipo] = C.decodeNetwork(idx);
+        S.infos[tipo] = info; S.nets[tipo] = C.decodeNetwork(idx); armonizarBranches();
         bootstrap.Modal.getOrCreateInstance($('ctModal')).hide();
         construir(); recalcular(); pintarRedBase();
         toast(`Cobertura ${tipo} guardada.`);
@@ -415,7 +432,7 @@
   // ---------- descargar KMZ ----------
   async function descargarKmz() {
     if (typeof JSZip === 'undefined') { alert('No cargó la librería para crear KMZ.'); return; }
-    const vis = visibles(), net = S.nets.FTTH;
+    const vis = visibles(), net = redes().length > 0;
     const x = s => esc(s);
     const coords = pts => pts.map(([la, lo]) => `${lo.toFixed(6)},${la.toFixed(6)},0`).join(' ');
     const geom = f => f.t === 'point' ? `<Point><coordinates>${coords([f.p[0][0]])}</coordinates></Point>`
@@ -430,15 +447,18 @@
       porFecha[f].forEach(r => {
         const c = r.c, s = resumenDe(r), st = r.dif === 0 ? 'hoy' : r.dif > 0 ? 'prox' : 'pas';
         const desc = `<b>${x(c.empresa)}</b> · ${x(c.hora)} (${C.fmtDur(r.dur)})<br>${x([c.distrito, c.provincia, c.region].filter(Boolean).join(', '))}<br>${x(c.texto).replace(/\n/g, '<br>')}`
-          + (net ? `<br><br><b>Branch:</b> ${x(s.branches.join(', '))}<br><b>BTS:</b> ${x(s.bts.join(', '))}<br><b>OLT:</b> ${x(s.olts.join(', '))}<br><b>Clientes afectados:</b> ~${s.clientes}<br><b>HUBBOX:</b> ${s.hubs.length} · <b>ODB:</b> ${s.naps.length}` : '');
+          + (net ? `<br><br><b>Branch:</b> ${x(s.branches.join(', '))}<br><b>BTS:</b> ${x(s.bts.join(', '))}<br><b>OLT:</b> ${x(s.olts.join(', '))}<br><b>Clientes afectados:</b> ${x(cliTxt(s))}<br><b>HUBBOX:</b> ${s.hubs.length} · <b>ODB:</b> ${s.naps.length}` : '');
         body += `<Folder><name>${x((c.ini || '') + '–' + (c.fin || '') + ' · ' + c.empresa + ' · ' + (c.distrito || c.provincia) + ' · ' + resumenTexto(c).slice(0, 50))}</name><description><![CDATA[${desc}]]></description>`;
         (c.f || []).forEach(ft => { body += `<Placemark><name>${x(ft.n)}</name><description><![CDATA[${desc}]]></description><styleUrl>#c_${st}</styleUrl>${geom(ft)}</Placemark>`; });
-        if (net && (r.naps.size || r.hubs.size)) {
-          body += '<Folder><name>Red FTTH afectada</name>';
-          r.hubs.forEach(i => { const h = net.hubs[i]; if (h.p) body += `<Placemark><name>${x(hubName(i))}</name><styleUrl>#hub</styleUrl><Point><coordinates>${coords([h.p])}</coordinates></Point></Placemark>`; });
-          r.naps.forEach(i => { const n = net.naps[i], Z = net.zones[n.z]; body += `<Placemark><name>${x(n.n)}</name><description>${x((Z.olt || Z.n) + (n.h >= 0 ? ' / ' + net.hubs[n.h].n : ''))}</description><styleUrl>#nap</styleUrl><Point><coordinates>${coords([[n.la, n.lo]])}</coordinates></Point></Placemark>`; });
+        redes().forEach(nt => {
+          const H = r.hits[nt.tipo];
+          if (!H || !(H.naps.size || H.hubs.size || H.zonasCob.size)) return;
+          body += `<Folder><name>Red afectada (${nt.tipo})</name>`;
+          H.zonasCob.forEach(z => { const Z = nt.zones[z]; Z.poly.forEach(p => { body += `<Placemark><name>${x(Z.n)}</name><description>${x(Z.branch + ' · ' + (Z.olt || ''))}</description><styleUrl>#zona</styleUrl>${geom({ t: 'poly', p: [p] })}</Placemark>`; }); });
+          H.hubs.forEach(i => { const h = nt.hubs[i]; if (h.p) body += `<Placemark><name>${x(hubName(nt, i))}</name><styleUrl>#hub</styleUrl><Point><coordinates>${coords([h.p])}</coordinates></Point></Placemark>`; });
+          H.naps.forEach(i => { const n = nt.naps[i], Z = nt.zones[n.z]; body += `<Placemark><name>${x(n.n)}</name><description>${x((Z.olt || Z.n) + (n.h >= 0 ? ' / ' + nt.hubs[n.h].n : ''))}</description><styleUrl>#nap</styleUrl><Point><coordinates>${coords([[n.la, n.lo]])}</coordinates></Point></Placemark>`; });
           body += '</Folder>';
-        }
+        });
         body += '</Folder>';
       });
       body += '</Folder>';
@@ -450,6 +470,7 @@
       + sty('c_pas', 'ff8b7464', 'http://maps.google.com/mapfiles/kml/paddle/wht-circle.png')
       + sty('hub', 'ffed3a7c', 'http://maps.google.com/mapfiles/kml/shapes/square.png')
       + sty('nap', 'ff3c12be', 'http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png')
+      + sty('zona', 'ff481de1', 'http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png')
       + body + '</Document></kml>';
     const zip = new JSZip(); zip.file('doc.kml', kml);
     const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });

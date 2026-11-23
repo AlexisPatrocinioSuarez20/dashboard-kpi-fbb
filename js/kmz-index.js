@@ -224,13 +224,19 @@
             if (g.pts.length >= 2) lines.push([z, hb, name, simplify(g.pts, 0.00004)]);
           } else if (g.t === 'Polygon') {
             stats.poligonos++;
-            if (g.pts.length >= 3 && !RX_SKIP_POLY.test(name + ' ' + c.name) && (inCover(c.id, z) || c.id === zoneIdCont(z) || tipo === 'ODN'))
-              zones[z].c.push(simplify(g.pts, 0.00008));
+            if (g.pts.length >= 3 && !RX_SKIP_POLY.test(name + ' ' + c.name)) {
+              const ring = simplify(g.pts, 0.00008);
+              if (inCover(c.id, z) || c.id === zoneIdCont(z)) zones[z].c.push(ring);
+              else (zones[z].otros = zones[z].otros || []).push(ring);   // se usan si la zona no tiene cobertura propia
+            }
           }
         });
       });
     });
     function zoneIdCont(z) { for (let i = 0; i < C.length; i++) if (zoneOf[i] === z && (C[i].parent < 0 || zoneOf[C[i].parent] !== z)) return i; return -1; }
+
+    zones.forEach(z => { if (!z.c.length && z.otros) z.c = z.otros; delete z.otros; });
+    stats.cobertura = zones.reduce((a, z) => a + z.c.length, 0);
 
     // ubicación del hub = punto propio o centro de sus NAP
     const acc = hubs.map(() => [0, 0, 0]);

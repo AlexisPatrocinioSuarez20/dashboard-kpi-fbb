@@ -74,6 +74,13 @@
     return best;
   }
 
+  // distancia entre una forma del corte y un anillo (polígono de cobertura)
+  function distPoly(pf, ring) {
+    const R = ring.map(([la, lo]) => [lo * pf.kx, la * M_LAT]);
+    for (const part of pf.parts) for (const p of part) if (inRing(p[0], p[1], R)) return 0;
+    return distLine(pf, ring.concat([ring[0]]));
+  }
+
   // ---------- índice de red ----------
   function decodeNetwork(idx) {
     if (!idx) return null;
@@ -99,10 +106,24 @@
           const k = a + ':' + b; (lgrid.get(k) || lgrid.set(k, []).get(k)).push(l.i);
         }
     });
+    // rejilla de polígonos de cobertura (zonas)
+    const zgrid = new Map();
+    zones.forEach(z => {
+      z.bbox = null;
+      z.poly.forEach(r => r.forEach(([la, lo]) => {
+        if (!z.bbox) z.bbox = [la, lo, la, lo];
+        else { if (la < z.bbox[0]) z.bbox[0] = la; if (lo < z.bbox[1]) z.bbox[1] = lo; if (la > z.bbox[2]) z.bbox[2] = la; if (lo > z.bbox[3]) z.bbox[3] = lo; }
+      }));
+      if (!z.bbox) return;
+      for (let a = Math.floor(z.bbox[0] / CELL); a <= Math.floor(z.bbox[2] / CELL); a++)
+        for (let b = Math.floor(z.bbox[1] / CELL); b <= Math.floor(z.bbox[3] / CELL); b++) {
+          const k = a + ':' + b; (zgrid.get(k) || zgrid.set(k, []).get(k)).push(z.i);
+        }
+    });
     const napsPerOlt = {};
     naps.forEach(n => { const o = zones[n.z].olt; if (o) napsPerOlt[o] = (napsPerOlt[o] || 0) + 1; });
     return { tipo: idx.tipo, archivo: idx.archivo, creado: idx.creado, stats: idx.stats, branches: idx.branches,
-      zones, hubs, naps, lines, others, grid, lgrid, CELL, napsPerOlt };
+      zones, hubs, naps, lines, others, grid, lgrid, zgrid, CELL, napsPerOlt };
   }
 
   function candidates(net, bbox, grid) {
@@ -147,74 +168,89 @@
 
   // ---------- cruce principal ----------
   const BAJA = { distrito: 1, provincia: 1 };   // ubicaciones de confianza baja: solo entran si se pide
-  // cortes: data.cortes de cortes.json ; redes: [netFTTH, netODN]
+  const vacio = () => ({ naps: new Set(), hubs: new Set(), zones: new Set(), zonasCob: new Set(), lines: new Set() });
+
+  // cortes: data.cortes de cortes.json ; redes: lista de redes (FTTH, ODN…) ya decodificadas
   function cruzar(cortes, redes, opts = {}) {
     const ref = opts.ref || dstr(new Date());
+    const nets = redes.filter(Boolean);
     const res = [];
     cortes.forEach(c => {
       const fechas = (c.fechas || []).slice().sort();
       if (!fechas.length) return;
       const ini = fechas[0], fin = fechas[fechas.length - 1];
       const dif = ini <= ref && ref <= fin ? 0 : (ini > ref ? diffDays(ini, ref) : diffDays(fin, ref));
-      const r = { c, dif, fechas, dur: duracion(c.ini, c.fin), activo: c.estado !== 'SUSPENDIDO',
-        naps: new Set(), hubs: new Set(), zones: new Set(), lines: new Set(), odn: new Set(), odnLines: new Set(), minDist: Infinity, hit: {} };
+      const r = { c, dif, fechas, dur: duracion(c.ini, c.fin), activo: c.estado !== 'SUSPENDIDO', hits: {}, minDist: Infinity };
+      nets.forEach(n => { r.hits[n.tipo] = vacio(); });
       r.soloAprox = (c.f || []).length > 0 && (c.f || []).every(f => BAJA[f.pr]);
       if (r.activo) (c.f || []).forEach(f => {
         if (!f.p || !f.p.length || !f.p[0].length) return;
         if (BAJA[f.pr] && !opts.incluirAprox) return;
         const pf = prepFeature(f);
-        redes.forEach(net => {
-          if (!net) return;
-          const isO = net.tipo === 'ODN';
+        nets.forEach(net => {
+          const H = r.hits[net.tipo];
           candidates(net, pf.bbox, net.grid).forEach(i => {
             const n = net.naps[i];
             const d = distPoint(pf, n.la, n.lo);
-            if (d <= pf.r) {
-              if (isO) r.odn.add(i); else { r.naps.add(i); r.zones.add(n.z); if (n.h >= 0) r.hubs.add(n.h); }
-              r.minDist = Math.min(r.minDist, d);
-              r.hit[f.n] = (r.hit[f.n] || 0) + 1;
-            }
+            if (d <= pf.r) { H.naps.add(i); H.zones.add(n.z); if (n.h >= 0) H.hubs.add(n.h); r.minDist = Math.min(r.minDist, d); }
           });
           candidates(net, pf.bbox, net.lgrid).forEach(i => {
             const l = net.lines[i];
             if (l.bbox[2] < pf.bbox[0] || l.bbox[0] > pf.bbox[2] || l.bbox[3] < pf.bbox[1] || l.bbox[1] > pf.bbox[3]) return;
-            const d = distLine(pf, l.pts);
-            if (d <= pf.r) { if (isO) r.odnLines.add(i); else { r.lines.add(i); r.zones.add(l.z); if (l.h >= 0) r.hubs.add(l.h); } }
+            if (distLine(pf, l.pts) <= pf.r) { H.lines.add(i); H.zones.add(l.z); if (l.h >= 0) H.hubs.add(l.h); }
+          });
+          candidates(net, pf.bbox, net.zgrid).forEach(zi => {
+            const z = net.zones[zi];
+            if (z.bbox[2] < pf.bbox[0] || z.bbox[0] > pf.bbox[2] || z.bbox[3] < pf.bbox[1] || z.bbox[1] > pf.bbox[3]) return;
+            if (z.poly.some(ring => distPoly(pf, ring) <= pf.r)) { H.zonasCob.add(zi); H.zones.add(zi); }
           });
         });
       });
-      r.afecta = r.naps.size + r.lines.size + r.odn.size + r.odnLines.size > 0;
+      r.afecta = Object.values(r.hits).some(H => H.naps.size || H.lines.size || H.zonasCob.size || H.zones.size);
       res.push(r);
     });
     return res;
   }
 
-  // resumen de un grupo de resultados (p. ej. los de hoy)
-  function resumen(rs, net, clientes) {
-    const branches = new Set(), bts = new Set(), olts = new Set(), hubs = new Set(), naps = new Set(), lines = new Set(), odn = new Set();
-    const napsPorOlt = {};
+  // resumen de un grupo de resultados (p. ej. los de hoy) sobre todas las redes cargadas
+  function resumen(rs, redes, clientes) {
+    const nets = (Array.isArray(redes) ? redes : [redes]).filter(Boolean);
+    const branches = new Set(), bts = new Set(), olts = new Set(), hubs = new Set(), naps = new Set(), lines = new Set(), zonas = new Set();
+    const napsPorOlt = {}, oltsPorZona = new Set();
     let ini = null, fin = null;
     rs.forEach(r => {
       if (r.c.ini && (ini === null || r.c.ini < ini)) ini = r.c.ini;
       if (r.c.fin && (fin === null || r.c.fin > fin)) fin = r.c.fin;
-      if (!net) return;
-      r.zones.forEach(z => { const Z = net.zones[z]; if (Z.branch) branches.add(Z.branch); if (Z.bts) bts.add(Z.bts); if (Z.olt) olts.add(Z.olt); });
-      r.hubs.forEach(h => hubs.add(h));
-      r.naps.forEach(n => { naps.add(n); });
-      r.lines.forEach(l => lines.add(l));
-      r.odn.forEach(o => odn.add(o));
+      nets.forEach(net => {
+        const H = r.hits[net.tipo]; if (!H) return;
+        H.zones.forEach(z => { const Z = net.zones[z]; if (Z.branch) branches.add(Z.branch); if (Z.bts) bts.add(Z.bts); if (Z.olt) olts.add(Z.olt); zonas.add(Z.olt || Z.n); });
+        H.zonasCob.forEach(z => { const o = net.zones[z].olt; if (o) oltsPorZona.add(o); });
+        H.hubs.forEach(h => { const Hb = net.hubs[h], Z = net.zones[Hb.z]; hubs.add((Z.olt || Z.n) + ' ' + Hb.n); });
+        H.naps.forEach(i => {
+          const n = net.naps[i], Z = net.zones[n.z];
+          const key = (Z.olt || Z.n) + ' ' + (n.h >= 0 ? net.hubs[n.h].n + '/' : '') + n.n;
+          if (naps.has(key)) return;
+          naps.add(key);
+          if (Z.olt) (napsPorOlt[Z.olt] = napsPorOlt[Z.olt] || { k: 0, tot: net.napsPerOlt[Z.olt] || 1 }).k++;
+        });
+        H.lines.forEach(l => lines.add(net.tipo + l));
+      });
     });
-    if (net) naps.forEach(n => { const o = net.zones[net.naps[n].z].olt; if (o) napsPorOlt[o] = (napsPorOlt[o] || 0) + 1; });
-    let cli = 0, cliSinDato = [];
-    Object.entries(napsPorOlt).forEach(([o, k]) => {
-      const act = clientes ? clientes[o] : undefined, tot = net.napsPerOlt[o] || k;
-      if (act === undefined) cliSinDato.push(o); else cli += act * Math.min(1, k / tot);
+    // clientes: por NAP afectadas (prorrateo) y, si la OLT solo se toca por su polígono, como máximo todos sus activos
+    let cli = 0, cliMax = 0; const cliSinDato = [], porOlt = [];
+    olts.forEach(o => {
+      const act = clientes ? clientes[o] : undefined;
+      const np = napsPorOlt[o];
+      if (act === undefined) { cliSinDato.push(o); porOlt.push({ olt: o, nap: np ? np.k : 0, tot: np ? np.tot : 0, act: undefined, est: undefined }); return; }
+      if (np) { const e = act * Math.min(1, np.k / np.tot); cli += e; porOlt.push({ olt: o, nap: np.k, tot: np.tot, act, est: Math.round(e) }); }
+      else if (oltsPorZona.has(o)) { cliMax += act; porOlt.push({ olt: o, nap: 0, tot: 0, act, est: undefined, max: act }); }
     });
-    return { n: rs.length, branches: [...branches].sort(), bts: [...bts].sort(), olts: [...olts].sort(), hubs: [...hubs], naps: [...naps],
-      lines: [...lines], odn: [...odn], ini, fin, dur: duracion(ini, fin), clientes: Math.round(cli), cliSinDato, napsPorOlt };
+    return { n: rs.length, branches: [...branches].sort(), bts: [...bts].sort(), olts: [...olts].sort(), hubs: [...hubs].sort(),
+      naps: [...naps].sort(), lines: [...lines], zonas: [...zonas].sort(), ini, fin, dur: duracion(ini, fin),
+      clientes: Math.round(cli), clientesMax: Math.round(cli + cliMax), cliSinDato, porOlt };
   }
 
-  const api = { decodeNetwork, cruzar, resumen, clientsFromSheet, duracion, fmtDur, dstr, addDays, diffDays, prepFeature, distPoint, distLine };
+  const api = { distPoly, decodeNetwork, cruzar, resumen, clientsFromSheet, duracion, fmtDur, dstr, addDays, diffDays, prepFeature, distPoint, distLine };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CortesCore = api;
 })(typeof self !== 'undefined' ? self : this);
